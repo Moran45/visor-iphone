@@ -34,6 +34,7 @@ final class DeviceSession {
   var hasFrame = false
   var videoSource = VideoSource.none
   var isLocked = false
+  var bluetoothState = BluetoothPointer.State.off
   var screenSize = CGSize(width: 390, height: 844)
   var orientation: Orientation = .portrait
   var fps = 0
@@ -49,11 +50,20 @@ final class DeviceSession {
   var quality: Double { didSet { defaults.set(quality, forKey: "quality") } }
   var team: String { didSet { defaults.set(team, forKey: "team") } }
   var bundleID: String { didSet { defaults.set(bundleID, forKey: "bundleID") } }
+  var bluetoothHover: Bool { didSet { defaults.set(bluetoothHover, forKey: "bluetoothHover") } }
+  var bluetoothEnabled: Bool {
+    didSet {
+      defaults.set(bluetoothEnabled, forKey: "bluetoothEnabled")
+      guard bluetoothEnabled != oldValue else { return }
+      if bluetoothEnabled, phase != .idle, let device = selected { bluetooth.start(deviceName: device.name) } else { bluetooth.stop() }
+    }
+  }
 
   @ObservationIgnored private let defaults = UserDefaults.standard
   @ObservationIgnored private let runner = WDARunner()
   @ObservationIgnored private let stream = MJPEGStream()
   @ObservationIgnored private let usb = USBScreenCapture()
+  @ObservationIgnored private let bluetooth = BluetoothPointer()
   @ObservationIgnored private var client: WDAClient?
   @ObservationIgnored private weak var view: DeviceView?
   @ObservationIgnored private var frames = 0
@@ -80,6 +90,8 @@ final class DeviceSession {
     quality = d.object(forKey: "quality") as? Double ?? 35
     team = d.string(forKey: "team") ?? "5JFGL5PVW6"
     bundleID = d.string(forKey: "bundleID") ?? "com.carlosmoran.wdaprueba.WebDriverAgentRunner"
+    bluetoothEnabled = d.object(forKey: "bluetoothEnabled") as? Bool ?? true
+    bluetoothHover = d.object(forKey: "bluetoothHover") as? Bool ?? false
 
     stream.onFrame = { [weak self] image in self?.receive(image) }
     stream.onDisconnect = { [weak self] in
@@ -95,9 +107,18 @@ final class DeviceSession {
     USBScreenCapture.enableDevices()
     for name in [AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification] {
       NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-        MainActor.assumeIsolated { self.map { session in Task { await session.updateVideoSource() } } }
+        MainActor.assumeIsolated {
+          guard let self else { return }
+          Task { await self.updateVideoSource() }
+        }
       }
     }
+    bluetooth.onState = { [weak self] state in
+      guard let self else { return }
+      self.bluetoothState = state
+      self.writeLog("[visor] puntero Bluetooth: \(state)")
+    }
+    bluetooth.onLog = { [weak self] line in self?.writeLog(line) }
     runner.onLog = { [weak self] line in self?.appendLog(line) }
     runner.onReady = { [weak self] url in Task { await self?.connect(url) } }
     runner.onExit = { [weak self] message in self?.wdaExited(message) }
@@ -168,10 +189,13 @@ final class DeviceSession {
     }
     // Por cable el video no necesita a WDA: aparece en segundos mientras WDA arranca.
     Task { await updateVideoSource() }
+    // El puntero Bluetooth tampoco: los toques en vivo funcionan aunque WDA siga arrancando.
+    if bluetoothEnabled { bluetooth.start(deviceName: device.name) }
   }
 
   /// Detiene el video y WebDriverAgent: mientras corre, WDA escucha sin contraseña en la red.
   func shutdown() {
+    bluetooth.stop()
     stream.stop()
     usb.stop()
     view?.setLive(nil)
@@ -388,6 +412,16 @@ final class DeviceSession {
 }
 
 extension DeviceSession: DeviceViewDelegate {
+  func deviceView(livePointer point: CGPoint, pressed: Bool) {
+    let p = toInterface(point)
+    let size = orientation == .portrait ? screenSize : CGSize(width: screenSize.height, height: screenSize.width)
+    bluetooth.pointer(x: p.x / size.width, y: p.y / size.height, pressed: pressed)
+  }
+
+  func deviceView(liveScrollY dy: Int, x dx: Int) {
+    bluetooth.scroll(dy: dy, dx: dx)
+  }
+
   func deviceView(didGesture gesture: Gesture) {
     let start: TimeInterval
     let path: [(point: CGPoint, time: TimeInterval)]

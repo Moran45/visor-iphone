@@ -51,6 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   var session: DeviceSession?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // Si el helper Bluetooth muere, escribirle no debe tumbar la app.
+    signal(SIGPIPE, SIG_IGN)
     // Necesario cuando se corre con `swift run` fuera del .app.
     NSApp.setActivationPolicy(.regular)
     NSApp.activate()

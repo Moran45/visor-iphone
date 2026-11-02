@@ -12,6 +12,8 @@ cd "$(dirname "$0")"
 
 APP="build/Visor iPhone.app"
 BUILD_NUMBER="$(date +%Y%m%d%H%M)"
+# Huella del código de WebDriverAgent: la app solo lo vuelve a copiar (y Xcode a compilar) si cambia.
+WDA_STAMP="$(cd vendor/WebDriverAgent && find . -type f -not -name .DS_Store -print0 | sort -z | xargs -0 shasum | shasum | cut -c1-12)"
 
 if [[ ! -f vendor/WebDriverAgent/WebDriverAgent.xcodeproj/project.pbxproj ]]; then
   echo "Falta vendor/WebDriverAgent. Descárgalo con:" >&2
@@ -24,6 +26,9 @@ swift build -c release
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/VisorIPhone "$APP/Contents/MacOS/VisorIPhone"
+# Helper del puntero Bluetooth (toques en vivo); la app lo lanza como proceso hijo.
+clang -fobjc-arc -O2 -Wall -framework Foundation -framework CoreBluetooth -framework IOBluetooth \
+  -IHelpers/VisorHID Helpers/VisorHID/main.m -o "$APP/Contents/MacOS/VisorHID"
 rsync -a --exclude .git --exclude xcuserdata vendor/WebDriverAgent "$APP/Contents/Resources/"
 
 ICONSET="$(mktemp -d)/AppIcon.iconset"
@@ -48,6 +53,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>VisorWDAStamp</key><string>${WDA_STAMP}</string>
   <key>CFBundleDevelopmentRegion</key><string>es</string>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
@@ -55,6 +61,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSLocalNetworkUsageDescription</key><string>Para ver y controlar el iPhone, la app se conecta a WebDriverAgent en la red local.</string>
   <key>NSCameraUsageDescription</key><string>Para mostrar la pantalla del iPhone conectado por cable, igual que QuickTime.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>Para tocar el iPhone en vivo, la Mac se presenta ante él como un puntero Bluetooth.</string>
   <key>NSMicrophoneUsageDescription</key><string>El video del iPhone por cable incluye su audio; la app no lo graba.</string>
 </dict>
 </plist>
@@ -63,6 +70,7 @@ PLIST
 if [[ -z "${SIGN_IDENTITY:-}" ]] && security find-identity -v -p codesigning | grep -q "(Y54J9V4XJ6)"; then
   SIGN_IDENTITY="Y54J9V4XJ6"
 fi
+codesign --force --sign "${SIGN_IDENTITY:--}" "$APP/Contents/MacOS/VisorHID"
 codesign --force --sign "${SIGN_IDENTITY:--}" "$APP"
 echo "Listo: $APP (firma: ${SIGN_IDENTITY:-ad hoc})"
 

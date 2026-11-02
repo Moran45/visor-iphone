@@ -31,6 +31,10 @@ protocol DeviceViewDelegate: AnyObject {
   func deviceView(didPress button: ChromeButton.Action)
   func deviceView(didType text: String)
   func deviceViewDidPaste()
+  /// Modo en vivo (puntero Bluetooth): cada movimiento, con el «dedo» apoyado o no.
+  func deviceView(livePointer point: CGPoint, pressed: Bool)
+  /// Modo en vivo: clics de rueda (positivo = hacia arriba / derecha) sobre lo que esté bajo el puntero.
+  func deviceView(liveScrollY dy: Int, x dx: Int)
 }
 
 /// iPhone dibujado con su bezel; la pantalla es una capa con el último cuadro del stream.
@@ -41,6 +45,15 @@ final class DeviceView: NSView {
   var showBezel = true { didSet { if oldValue != showBezel { invalidateGeometry() } } }
   var screenSize = CGSize(width: 390, height: 844) { didSet { if oldValue != screenSize { invalidateGeometry() } } }
   var keyboardEnabled = true
+  /// Con el puntero Bluetooth conectado, el mouse se transmite en vivo en lugar de mandar gestos al soltar.
+  var liveInput = false {
+    didSet { if !liveInput { livePressed = false } }
+  }
+  private var livePressed = false
+  /// Si el puntero del iPhone sigue al mouse sin hacer clic (iOS resalta cada elemento al pasar).
+  var liveHover = false
+  /// Dónde se presionó; hasta alejarse 4 pt no se mandan movimientos, para que el temblor del clic no sea un arrastre.
+  private var livePressPoint: CGPoint?
 
   private let bezelLayer = CALayer()
   private var bezelKey = ""
@@ -57,6 +70,12 @@ final class DeviceView: NSView {
   private var pressed: ChromeButton.Action?
   private var hovered: ChromeButton.Action?
   private var scroll: (start: CGPoint, time: TimeInterval, delta: CGPoint)?
+  /// Scroll en vivo por rueda: si hay un gesto en curso y lo que sobra de puntos que aún no llega a un clic de rueda.
+  private var wheelActive = false
+  private var wheelRemainder = CGPoint.zero
+  private var wheelIdle: DispatchWorkItem?
+  /// Puntos del iPhone por clic de rueda.
+  private static let pointsPerWheelStep: CGFloat = 8
   private var scrollFlush: DispatchWorkItem?
 
   override init(frame: NSRect) {
@@ -246,6 +265,8 @@ final class DeviceView: NSView {
   }
 
   override func mouseMoved(with event: NSEvent) {
+    // En vivo, el puntero del iPhone sigue al mouse como en Device Hub.
+    if liveInput && liveHover, let sp = screenPoint(devicePoint(event)) { delegate?.deviceView(livePointer: sp, pressed: false) }
     let action = button(at: devicePoint(event))?.action
     if action != hovered {
       hovered = action
@@ -270,11 +291,26 @@ final class DeviceView: NSView {
       return
     }
     guard let sp = screenPoint(p) else { return }
-    samples = [(sp, event.timestamp)]
     showTouch(at: p)
+    if liveInput {
+      livePressed = true
+      livePressPoint = sp
+      delegate?.deviceView(livePointer: sp, pressed: true)
+      return
+    }
+    samples = [(sp, event.timestamp)]
   }
 
   override func mouseDragged(with event: NSEvent) {
+    if livePressed, let sp = screenPoint(devicePoint(event), clamp: true) {
+      if let start = livePressPoint {
+        guard hypot(sp.x - start.x, sp.y - start.y) >= 4 else { return }
+        livePressPoint = nil
+      }
+      delegate?.deviceView(livePointer: sp, pressed: true)
+      showTouch(at: CGPoint(x: sp.x + screenRect.minX, y: sp.y + screenRect.minY))
+      return
+    }
     guard pressed == nil, !samples.isEmpty, let sp = screenPoint(devicePoint(event), clamp: true) else { return }
     samples.append((sp, event.timestamp))
     showTouch(at: CGPoint(x: sp.x + screenRect.minX, y: sp.y + screenRect.minY))
@@ -285,6 +321,14 @@ final class DeviceView: NSView {
       pressed = nil
       updateBezel()
       if button(at: devicePoint(event))?.action == action { delegate?.deviceView(didPress: action) }
+      return
+    }
+    if livePressed {
+      livePressed = false
+      touchLayer.isHidden = true
+      // Un clic sin arrastre se suelta donde se presionó.
+      if let sp = livePressPoint ?? screenPoint(devicePoint(event), clamp: true) { delegate?.deviceView(livePointer: sp, pressed: false) }
+      livePressPoint = nil
       return
     }
     guard !samples.isEmpty else { return }
@@ -321,6 +365,10 @@ final class DeviceView: NSView {
   }
 
   override func scrollWheel(with event: NSEvent) {
+    if liveInput {
+      liveScroll(event)
+      return
+    }
     // La inercia la pone iOS: solo cuenta el tramo con los dedos en el trackpad.
     guard event.momentumPhase.isEmpty else { return }
     let p = devicePoint(event)
@@ -345,13 +393,47 @@ final class DeviceView: NSView {
     }
   }
 
+  /// Scroll en vivo como rueda de mouse: no presiona nada, así no se «pega» a un botón ni termina en clic.
+  /// Incluye la inercia del trackpad, que en iOS se ve como seguir girando la rueda.
+  private func liveScroll(_ event: NSEvent) {
+    let gestureStart = event.phase == .began || (!wheelActive && event.momentumPhase.isEmpty)
+    if gestureStart {
+      guard let sp = screenPoint(devicePoint(event)) else { return }
+      wheelActive = true
+      wheelRemainder = .zero
+      // La rueda mueve lo que está bajo el puntero: primero se lleva ahí.
+      delegate?.deviceView(livePointer: sp, pressed: false)
+    }
+    guard wheelActive else { return }
+    let unit: CGFloat = (event.hasPreciseScrollingDeltas ? 1 : 12) / scale
+    wheelRemainder.x += event.scrollingDeltaX * unit
+    wheelRemainder.y += event.scrollingDeltaY * unit
+    let step = Self.pointsPerWheelStep
+    let dy = Int(wheelRemainder.y / step)
+    let dx = Int(wheelRemainder.x / step)
+    wheelRemainder.y -= CGFloat(dy) * step
+    wheelRemainder.x -= CGFloat(dx) * step
+    // Con el desplazamiento natural, deltaY negativo (dedos hacia arriba) es bajar en el contenido: rueda negativa.
+    if dy != 0 || dx != 0 { delegate?.deviceView(liveScrollY: dy, x: -dx) }
+    if event.momentumPhase == .ended || (event.phase == .ended && event.momentumPhase.isEmpty) || event.phase == .cancelled {
+      wheelActive = false
+    }
+    // Rueda clásica (sin fases): el gesto termina tras una pausa.
+    wheelIdle?.cancel()
+    let idle = DispatchWorkItem { [weak self] in self?.wheelActive = false }
+    wheelIdle = idle
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: idle)
+  }
+
+  private func clampToScreen(_ p: CGPoint) -> CGPoint {
+    CGPoint(x: min(max(p.x, 1), screenSize.width - 1), y: min(max(p.y, 1), screenSize.height - 1))
+  }
+
   private func finishScroll(at time: TimeInterval) {
     guard let s = scroll else { return }
     scroll = nil
     guard hypot(s.delta.x, s.delta.y) > 4 else { return }
-    let end = CGPoint(
-      x: min(max(s.start.x + s.delta.x, 1), screenSize.width - 1),
-      y: min(max(s.start.y + s.delta.y, 1), screenSize.height - 1))
+    let end = clampToScreen(CGPoint(x: s.start.x + s.delta.x, y: s.start.y + s.delta.y))
     let duration = min(max(time - s.time, 0.08), 0.6)
     delegate?.deviceView(didGesture: .drag([(s.start, 0), (end, duration)]))
   }
@@ -432,6 +514,8 @@ struct DeviceCanvas: NSViewRepresentable {
     view.showBezel = session.showBezel
     view.screenSize = session.screenSize
     view.keyboardEnabled = session.keyboardEnabled
+    view.liveInput = session.bluetoothState == .ready
+    view.liveHover = session.bluetoothHover
     host.needsLayout = true
   }
 }

@@ -191,6 +191,17 @@ private struct TouchStatus: View {
       .padding(.horizontal, 14)
       .padding(.vertical, 8)
       .glassEffect(.regular, in: .capsule)
+    case .running where session.bluetoothState == .needsPairing:
+      HStack(spacing: 8) {
+        Image(systemName: "dot.radiowaves.left.and.right")
+        Text("Toques en vivo: en el iPhone, Ajustes › Bluetooth › «\(Host.current().localizedName ?? "esta Mac")»")
+          .lineLimit(2)
+      }
+      .font(.callout)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 8)
+      .frame(maxWidth: 360)
+      .glassEffect(.regular, in: .capsule)
     case .running where session.isLocked:
       HStack(spacing: 8) {
         Image(systemName: "lock.fill")
@@ -311,6 +322,15 @@ private struct SettingsPanel: View {
         Text("Solo cuando el iPhone no está conectado por cable. Por cable el video va a 60 fps, como en QuickTime.")
       }
       Section {
+        Toggle("Toques en vivo por Bluetooth", isOn: $session.bluetoothEnabled)
+        Toggle("El puntero sigue al mouse", isOn: $session.bluetoothHover)
+          .disabled(!session.bluetoothEnabled)
+      } header: {
+        Text("Toques")
+      } footer: {
+        Text("La Mac se presenta como un puntero Bluetooth: tocar, arrastrar y hacer scroll llegan al momento. Requiere AssistiveTouch activado y el iPhone emparejado con esta Mac. Si no está disponible, se usa WebDriverAgent. Con «sigue al mouse», iOS resalta cada elemento al pasar por encima.")
+      }
+      Section {
         TextField("Equipo de desarrollo", text: $session.team)
         TextField("Bundle ID del runner", text: $session.bundleID)
       } header: {
@@ -352,6 +372,7 @@ private struct InfoPanel: View {
           row("UDID", d.id)
         }
         row("WebDriverAgent", session.wdaURL?.absoluteString ?? "Detenido")
+        row("Toques", touchLabel)
         row("Video", session.hasFrame ? "\(session.videoSource.rawValue) · \(Int(session.frameSize.width))×\(Int(session.frameSize.height)) · \(session.fps) fps" : session.videoSource.rawValue)
       }
       Text("Mientras se ve la pantalla, WebDriverAgent escucha sin contraseña en la red del iPhone. Al cerrar la app se detiene.")
@@ -362,6 +383,16 @@ private struct InfoPanel: View {
     .padding(16)
     .frame(width: 380)
     .textSelection(.enabled)
+  }
+
+  private var touchLabel: String {
+    switch session.bluetoothState {
+    case .ready: "Bluetooth en vivo (AssistiveTouch)"
+    case .connecting: "Conectando puntero Bluetooth…"
+    case .needsPairing: "Falta emparejar el iPhone con esta Mac"
+    case .failed(let message): "WebDriverAgent · Bluetooth: \(message)"
+    case .off: "WebDriverAgent"
+    }
   }
 
   private func row(_ title: String, _ value: String) -> some View {

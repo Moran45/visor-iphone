@@ -288,7 +288,7 @@ final class WDARunner: @unchecked Sendable {
       let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appending(path: "VisorIPhone")
       let target = support.appending(path: "WebDriverAgent")
       let stamp = target.appending(path: ".version")
-      let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+      let version = Bundle.main.object(forInfoDictionaryKey: "VisorWDAStamp") as? String ?? "0"
       if (try? String(contentsOf: stamp, encoding: .utf8)) != version {
         try? fm.removeItem(at: target)
         try fm.createDirectory(at: support, withIntermediateDirectories: true)

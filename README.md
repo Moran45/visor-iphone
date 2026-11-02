@@ -59,6 +59,26 @@ Al abrirla, macOS pide permiso de **cámara** (para el video por cable, igual qu
 Mientras la app muestra el iPhone, WebDriverAgent escucha **sin contraseña** en la IP del iPhone (puertos 8100 y 9100):
 cualquiera en la misma red podría controlarlo. Al cerrar la app se detiene. Úsala en redes de confianza.
 
+## Toques en vivo por Bluetooth (experimental)
+
+> **Estado:** rama experimental, no lista para uso diario. Funciona la conexión automática, el clic y el scroll
+> por rueda, pero en iOS 27 el puntero de AssistiveTouch se comporta raro: resalta las cajas en lugar de
+> mostrarse como cursor, un arrastre que empieza sobre un botón termina en clic, y no siempre se ve el puntero.
+> La versión estable (v1) usa WebDriverAgent para todos los toques.
+
+Con WebDriverAgent cada gesto se manda completo al soltar el mouse. Para que tocar, arrastrar y hacer scroll
+lleguen al momento, la app lanza `VisorHID` (en `Helpers/VisorHID`): la Mac se presenta ante el iPhone como
+un **puntero Bluetooth absoluto** que el iPhone usa con AssistiveTouch. Al pasar el mouse sobre la pantalla,
+el puntero del iPhone lo sigue.
+
+- Requiere **AssistiveTouch** activado (Ajustes › Accesibilidad › Tocar) y emparejar una vez el iPhone con la
+  Mac: con Visor abierto, en el iPhone ve a Ajustes › Bluetooth y toca la Mac. Después se reconecta sola.
+- Teclado, Inicio, bloqueo y capturas siguen por WebDriverAgent. Si el Bluetooth no está disponible, todo
+  vuelve a WebDriverAgent. Se apaga en Ajustes (icono de controles).
+- Usa clases privadas de CoreBluetooth (`CBClassicManager`); una actualización de macOS puede romperlo.
+  El transporte sigue el de [open-phone](https://github.com/Array-Ventures/open-phone) (MIT).
+  `Scripts/hid_sdp.py` genera el registro SDP del dispositivo HID.
+
 ## Parche en WebDriverAgent
 
 `vendor/WebDriverAgent/WebDriverAgentLib/Commands/FBTouchActionCommands.m` agrega `POST /wda/visor/touch` y
